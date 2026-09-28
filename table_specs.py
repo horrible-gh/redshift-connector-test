@@ -169,7 +169,9 @@ def _table_name_from_path(path: Path) -> str:
     return f"{schema}.{table}"
 
 
-def load_table_specs(\n    directory: Optional[Union[Path, str]] = None,\n) -> List[Dict]:
+def load_table_specs(
+    directory: Optional[Union[Path, str]] = None,
+) -> List[Dict]:
     """
     Load active table specifications.
 
