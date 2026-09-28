@@ -647,8 +647,13 @@ def _build_plan(
     Returns:
         A TablePlan dataclass instance with all relevant details for syncing the table.
     """
-    # Determine primary keys for the table
-    primary_keys = spec.get("primary_keys") or table_metadata.get("primary_keys") or []
+    # Determine primary keys for the table.
+    # primary_keys=null (or omitted) means "discover from Redshift metadata".
+    # primary_keys=[] explicitly declares that the table has no primary key.
+    if "primary_keys" in spec and spec.get("primary_keys") is not None:
+        primary_keys = spec.get("primary_keys")
+    else:
+        primary_keys = table_metadata.get("primary_keys") or []
     # Determine replication strategy and replication key
     strategy, replication_key = _determine_strategy_and_replication_key(
         spec=spec,
