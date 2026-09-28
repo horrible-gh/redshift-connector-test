@@ -123,3 +123,69 @@ The connector includes the following additional files:
 ## Additional considerations
 
 The examples provided are intended to help you effectively use Fivetran's Connector SDK. While we've tested the code, Fivetran cannot be held responsible for any unexpected or negative consequences that may arise from using these examples. For inquiries, please reach out to our Support team.
+
+
+## Table-spec mode used in this fork
+
+This repository keeps Fivetran's Redshift Large Data Volume connector as the base
+and moves per-table configuration out of Python code.
+
+Active table files are placed directly under `tables/`:
+
+```text
+tables/
+├── _defaults.json
+├── sales.orders.json
+├── sales.customers.json
+└── examples/
+    ├── example.pk_timestamp.json
+    ├── example.pk_no_timestamp.json
+    ├── example.no_pk_timestamp.json
+    └── example.no_pk_no_timestamp.json
+```
+
+The file name is the table identity: `<schema>.<table>.json`. The `name` field
+can therefore be omitted. Files under subdirectories such as `tables/examples/`
+are not loaded.
+
+For this mode, keep `auto_schema_detection` set to `false`. The connector
+still reads Redshift metadata for each table named by a JSON file, so columns and
+primary keys can continue to be discovered from the source.
+
+### Default + override behavior
+
+`tables/_defaults.json` supplies project-wide defaults. A table JSON only needs
+to contain exceptions.
+
+```json
+{
+  "replication_key": "updated_at",
+  "use_chunking": true
+}
+```
+
+Important values:
+
+- `"primary_keys": null`: discover the primary key from Redshift metadata.
+- `"primary_keys": []`: explicitly declare that the table has no primary key.
+- `"strategy": "AUTO"`: use incremental sync when a suitable timestamp/date
+  replication key is available; otherwise fall back to full sync.
+- `"replication_key": null`: infer the replication key from timestamp/date
+  columns, preferring names such as `updated_at` and `last_updated`.
+- `"enabled": false`: temporarily exclude a table without deleting its file.
+
+To add a table, create one file such as:
+
+```text
+tables/public.orders.json
+```
+
+An empty JSON object is valid when all defaults and Redshift metadata should be
+used:
+
+```json
+{}
+```
+
+The four files in `tables/examples/` document the PK/timestamp combinations
+without becoming active sync targets.
