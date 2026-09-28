@@ -96,7 +96,7 @@ def _validate_string_list(value, field, source, allow_none=False):
         raise ValueError(f"{source}: '{field}' must be a list of non-empty strings{suffix}.")
 
 
-def _validate_spec(spec: dict, source: Path, expected_name: str | None = None):
+def _validate_spec(spec: dict, source: Path, expected_name: Optional[str] = None):
     unknown = sorted(set(spec) - _ALLOWED_SPEC_KEYS)
     if unknown:
         raise ValueError(f"{source}: unsupported key(s): {', '.join(unknown)}")
