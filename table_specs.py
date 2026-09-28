@@ -14,6 +14,7 @@ and are not loaded by the connector.
 import json
 from copy import deepcopy
 from pathlib import Path
+from typing import Dict, List, Optional, Union
 
 
 # Preferred timestamp column names for inferring replication keys.
