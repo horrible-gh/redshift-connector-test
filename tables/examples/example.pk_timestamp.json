@@ -1,0 +1,6 @@
+{
+  "primary_keys": null,
+  "strategy": "AUTO",
+  "replication_key": null,
+  "use_chunking": true
+}
