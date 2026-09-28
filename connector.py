@@ -43,6 +43,7 @@ def validate_configuration(configuration: dict):
         "batch_size",
         "auto_schema_detection",
         "enable_complete_resync",
+        "max_parallel_workers",
     ]
     missing = [k for k in required_configs if k not in configuration]
     if missing:
