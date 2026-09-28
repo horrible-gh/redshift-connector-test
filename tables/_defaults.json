@@ -1,0 +1,11 @@
+{
+  "primary_keys": null,
+  "strategy": "AUTO",
+  "replication_key": null,
+  "include": [],
+  "exclude": [],
+  "use_chunking": false,
+  "column_types": {},
+  "filter": null,
+  "enabled": true
+}
