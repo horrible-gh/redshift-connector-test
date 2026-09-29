@@ -37,7 +37,12 @@ redshift_connector = types.ModuleType("redshift_connector")
 redshift_connector.connect = lambda **kwargs: None
 sys.modules.setdefault("redshift_connector", redshift_connector)
 
-from redshift_client import build_select, sync_table_chunked_cursors
+from redshift_client import (
+    _checkpoint,
+    _determine_strategy_and_replication_key,
+    build_select,
+    sync_table_chunked_cursors,
+)
 
 
 class DummyCursor:
@@ -145,6 +150,51 @@ class IncrementalBookmarkTests(unittest.TestCase):
             )
 
         self.assertEqual(25000, captured["chunk_size"])
+
+
+    def test_numeric_bookmark_preserves_integer_type(self):
+        state = {}
+        _checkpoint(
+            state=state,
+            stream="public.orders",
+            replication_key="change_seq",
+            bookmark=9007199254740993,
+        )
+
+        self.assertEqual(9007199254740993, state["public.orders"]["bookmark"])
+        self.assertIsInstance(state["public.orders"]["bookmark"], int)
+
+    def test_explicit_numeric_replication_key_uses_incremental_strategy(self):
+        strategy, key = _determine_strategy_and_replication_key(
+            spec={
+                "name": "public.orders",
+                "strategy": "INCREMENTAL",
+                "replication_key": "change_seq",
+            },
+            cols_with_types=[
+                ("id", "bigint"),
+                ("change_seq", "bigint"),
+                ("payload", "character varying"),
+            ],
+            enable_complete_resync=False,
+        )
+
+        self.assertEqual("INCREMENTAL", strategy)
+        self.assertEqual("change_seq", key)
+
+    def test_numeric_boundary_query_keeps_numeric_parameter(self):
+        sql, params = build_select(
+            redshift_schema="public",
+            table="orders",
+            columns=["id", "change_seq"],
+            replication_key="change_seq",
+            bookmark=123456,
+            inclusive_bookmark=True,
+        )
+
+        self.assertIn('"change_seq" >= %s', sql)
+        self.assertEqual([123456], params)
+        self.assertIsInstance(params[0], int)
 
 if __name__ == "__main__":
     unittest.main()
