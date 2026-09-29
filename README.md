@@ -202,3 +202,16 @@ from being skipped after a restart.
 When chunking is enabled, only the first chunk of a sync/restart uses the inclusive
 lower boundary. Later chunks use strict `>` so chunk processing always advances.
 This behavior requires no additional per-table JSON setting.
+
+
+### Batch size and chunk size
+
+When `use_chunking` is enabled, the configured `batch_size` is also used as
+the target chunk size. There is no separate fixed chunk-size setting.
+
+For example, `batch_size=20000` means:
+- each cursor FETCH requests up to 20,000 rows;
+- each chunk boundary is selected around the 20,000th remaining row.
+
+Rows sharing the same replication-key value stay in the same chunk, so an actual
+chunk may be larger than `batch_size`.
