@@ -40,7 +40,6 @@ TIMESTAMP_TYPE_NAMES = {
 }
 
 CHECKPOINT_EVERY_ROWS = 50000
-CHUNK_SIZE = 10000
 
 TABLE_SPECS_DIR = Path(__file__).resolve().parent / "tables"
 DEFAULTS_FILE_NAME = "_defaults.json"
