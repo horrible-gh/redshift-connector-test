@@ -792,9 +792,16 @@ def _checkpoint(state, stream, replication_key, bookmark):
     """
     if replication_key and bookmark is not None:
         # Format the bookmark value appropriately for JSON serialization
-        bookmark = (
-            bookmark.isoformat() if isinstance(bookmark, (datetime, date)) else str(bookmark)
-        )
+        if isinstance(bookmark, (datetime, date)):
+            bookmark = bookmark.isoformat()
+        elif isinstance(bookmark, (str, int, float, bool)):
+            # Keep JSON-native scalar types as-is. In particular, integer/bigint
+            # replication keys must remain numeric across checkpoints.
+            pass
+        else:
+            # Fallback for non-JSON-native driver values (for example Decimal).
+            # Explicit support for those types requires source-type-aware restore.
+            bookmark = str(bookmark)
 
     state[stream] = {"bookmark": bookmark, "replication_key": replication_key}
     # Save the progress by checkpointing the state. This is important for ensuring that the sync process can resume
