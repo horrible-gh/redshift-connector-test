@@ -329,6 +329,7 @@ def build_select(
     bookmark,
     upper_bound=None,
     filter_condition=None,
+    inclusive_bookmark=False,
 ):
     """
     Build a parameterized SELECT SQL query for the given table and columns.
@@ -343,6 +344,7 @@ def build_select(
         bookmark: last synced value of the replication key, or None
         upper_bound: optional upper bound for the replication_key (for chunking)
         filter_condition: optional dict with keys 'column', 'operator', 'value' for a static WHERE filter
+        inclusive_bookmark: when True, include rows equal to the saved bookmark (>=)
     Returns:
         A tuple of (sql_query, params) where sql_query is the parameterized SQL string
         and params is a list of parameters to bind to the query.
@@ -357,8 +359,11 @@ def build_select(
     params = []
     where_conditions = []
     if replication_key and bookmark is not None:
-        # If a bookmark is provided, add a WHERE clause to filter rows greater than the bookmark
-        where_conditions.append(f'"{replication_key}" > %s')
+        # PK-backed incremental syncs intentionally re-read the saved boundary value.
+        # Fivetran upsert collapses re-read rows by primary key, while >= prevents
+        # rows sharing the same replication-key value from being skipped after restart.
+        bookmark_operator = ">=" if inclusive_bookmark else ">"
+        where_conditions.append(f'"{replication_key}" {bookmark_operator} %s')
         params.append(bookmark)
     filter_sql, filter_value = _build_filter_condition(filter_condition)
     if filter_sql:
@@ -394,7 +399,13 @@ def _declare_cursor(cursor, table_cursor, sql_query, params):
 
 
 def _find_chunk_upper_bound(
-    connection, plan, replication_key, bookmark, chunk_size, filter_condition=None
+    connection,
+    plan,
+    replication_key,
+    bookmark,
+    chunk_size,
+    filter_condition=None,
+    inclusive_bookmark=False,
 ):
     """
     Find the replication_key value at approximately row chunk_size from the current bookmark.
@@ -416,7 +427,8 @@ def _find_chunk_upper_bound(
     where_parts = []
     params = []
     if bookmark is not None:
-        where_parts.append(f'"{replication_key}" > %s')
+        bookmark_operator = ">=" if inclusive_bookmark else ">"
+        where_parts.append(f'"{replication_key}" {bookmark_operator} %s')
         params.append(bookmark)
     filter_sql, filter_value = _build_filter_condition(filter_condition)
     if filter_sql:
@@ -816,6 +828,15 @@ def sync_table_chunked_cursors(connection, plan, state, bookmark, batch_size):
 
     # Process data in chunks until all rows are synced
     while True:
+        # At the start of a sync/restart, PK-backed tables re-read the saved
+        # replication-key boundary. Later chunks in the same run use strict >
+        # so the chunk loop always advances.
+        inclusive_start = (
+            bool(plan.primary_keys)
+            and current_bookmark is not None
+            and chunk_number == 0
+        )
+
         # Find the upper bound for this chunk (replication_key value at ~CHUNK_SIZE rows)
         upper_bound = _find_chunk_upper_bound(
             connection=connection,
@@ -824,6 +845,7 @@ def sync_table_chunked_cursors(connection, plan, state, bookmark, batch_size):
             bookmark=current_bookmark,
             chunk_size=CHUNK_SIZE,
             filter_condition=plan.filter_condition,
+            inclusive_bookmark=inclusive_start,
         )
 
         chunk_number += 1
@@ -843,6 +865,7 @@ def sync_table_chunked_cursors(connection, plan, state, bookmark, batch_size):
                 bookmark=current_bookmark,
                 upper_bound=upper_bound,
                 filter_condition=plan.filter_condition,
+                inclusive_bookmark=inclusive_start,
             )
         else:
             # If upper_bound is None, there are fewer than CHUNK_SIZE rows remaining - process all of them
@@ -857,6 +880,7 @@ def sync_table_chunked_cursors(connection, plan, state, bookmark, batch_size):
                 replication_key=replication_key,
                 bookmark=current_bookmark,
                 filter_condition=plan.filter_condition,
+                inclusive_bookmark=inclusive_start,
             )
 
         with connection.cursor() as cursor:
@@ -993,6 +1017,7 @@ def sync_table_server_side_cursor(connection, replication_key, plan, state, book
         replication_key=replication_key,
         bookmark=bookmark,
         filter_condition=plan.filter_condition,
+        inclusive_bookmark=bool(plan.primary_keys) and bookmark is not None,
     )
 
     # Initialize counter to track number of rows processed
