@@ -189,3 +189,16 @@ used:
 
 The four files in `tables/examples/` document the PK/timestamp combinations
 without becoming active sync targets.
+
+
+### Incremental boundary safety for PK-backed tables
+
+For incremental tables that have a primary key, a saved replication-key value is
+re-read inclusively on the next sync (`>= bookmark`). Re-reading the boundary is
+intentional: multiple rows commonly share the same update timestamp, and primary-key
+upsert safely collapses already-seen rows while preventing rows at the saved boundary
+from being skipped after a restart.
+
+When chunking is enabled, only the first chunk of a sync/restart uses the inclusive
+lower boundary. Later chunks use strict `>` so chunk processing always advances.
+This behavior requires no additional per-table JSON setting.
