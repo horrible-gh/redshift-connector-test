@@ -21,7 +21,6 @@ from table_specs import (
     PREFERRED_TS_COLUMN_NAMES,
     TIMESTAMP_TYPE_NAMES,
     CHECKPOINT_EVERY_ROWS,
-    CHUNK_SIZE,
 )  # Table specifications and constants
 
 # Global variable to hold the list of table plans used during the sync
@@ -809,7 +808,7 @@ def sync_table_chunked_cursors(connection, plan, state, bookmark, batch_size):
     """
     Sync a table using chunked cursors to avoid server side cursor memory limits.
     This function processes data in chunks by creating smaller cursors based on replication_key ranges.
-    Each chunk is bounded by finding the replication_key value at approximately CHUNK_SIZE rows,
+    Each chunk is bounded by finding the replication_key value at approximately batch_size rows,
     ensuring all rows with the boundary value are included in the same chunk (no data loss).
 
     Args:
@@ -824,7 +823,7 @@ def sync_table_chunked_cursors(connection, plan, state, bookmark, batch_size):
     total_seen = 0
     chunk_number = 0
 
-    log.info(f"{plan.stream}: Using chunked cursors with target chunk size of {CHUNK_SIZE} rows")
+    log.info(f"{plan.stream}: Using chunked cursors with target chunk size of {batch_size} rows")
 
     # Process data in chunks until all rows are synced
     while True:
@@ -837,13 +836,13 @@ def sync_table_chunked_cursors(connection, plan, state, bookmark, batch_size):
             and chunk_number == 0
         )
 
-        # Find the upper bound for this chunk (replication_key value at ~CHUNK_SIZE rows)
+        # Find the upper bound for this chunk (replication_key value at ~batch_size rows)
         upper_bound = _find_chunk_upper_bound(
             connection=connection,
             plan=plan,
             replication_key=replication_key,
             bookmark=current_bookmark,
-            chunk_size=CHUNK_SIZE,
+            chunk_size=batch_size,
             filter_condition=plan.filter_condition,
             inclusive_bookmark=inclusive_start,
         )
@@ -868,7 +867,7 @@ def sync_table_chunked_cursors(connection, plan, state, bookmark, batch_size):
                 inclusive_bookmark=inclusive_start,
             )
         else:
-            # If upper_bound is None, there are fewer than CHUNK_SIZE rows remaining - process all of them
+            # If upper_bound is None, fewer than batch_size rows remain - process all of them
             log.info(
                 f"{plan.stream}: Processing final chunk {chunk_number} "
                 f"(bookmark: {current_bookmark}, no upper_bound - fetching all remaining rows)"
