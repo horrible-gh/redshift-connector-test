@@ -1,6 +1,6 @@
 {
   "primary_keys": [],
-  "strategy": "AUTO",
+  "strategy": "SNAPSHOT",
   "replication_key": null,
   "use_chunking": true
 }
