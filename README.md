@@ -170,6 +170,11 @@ Important values:
 - `"primary_keys": []`: explicitly declare that the table has no primary key.
 - `"strategy": "AUTO"`: use incremental sync when a suitable timestamp/date
   replication key is available; otherwise fall back to full sync.
+- `"strategy": "SNAPSHOT"`: replace the destination's active row set on every sync.
+  The connector calls `op.truncate()`, then reloads the complete source table. Because
+  the Connector SDK has no INSERT operation, SNAPSHOT rows receive the synthetic
+  `connector_snapshot_row_id` primary key before `op.upsert()`. This preserves
+  byte-for-byte duplicate source rows instead of collapsing them into one row.
 - `"replication_key": null`: infer the replication key from timestamp/date
   columns, preferring names such as `updated_at` and `last_updated`.
 - `"enabled": false`: temporarily exclude a table without deleting its file.
@@ -215,3 +220,35 @@ For example, `batch_size=20000` means:
 
 Rows sharing the same replication-key value stay in the same chunk, so an actual
 chunk may be larger than `batch_size`.
+
+
+### SNAPSHOT strategy for full-replacement sources
+
+Use `SNAPSHOT` when the source table itself is rebuilt as a complete image and
+the destination must match that image, including duplicate rows.
+
+Example for a source with no database primary key but with a timestamp available
+for chunk boundaries:
+
+```json
+{
+  "primary_keys": [],
+  "strategy": "SNAPSHOT",
+  "replication_key": null,
+  "use_chunking": true
+}
+```
+
+For SNAPSHOT tables:
+
+- Redshift primary-key metadata is not used for destination identity.
+- The destination schema declares `connector_snapshot_row_id` as a synthetic
+  `LONG` primary key.
+- The synthetic key is generated as 1, 2, 3, ... across the entire table load,
+  including across chunk boundaries.
+- The source timestamp, when available, may be inferred as a chunk boundary key,
+  but its saved bookmark is never used to resume a later SNAPSHOT sync.
+- Each sync starts with `op.truncate(table=...)`, then reloads the complete source
+  image using `op.upsert()`.
+- Two source rows with identical values remain two destination rows because their
+  synthetic row identifiers differ.
