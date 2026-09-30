@@ -69,6 +69,18 @@ class TableSpecLoaderTests(unittest.TestCase):
 
             self.assertEqual([], load_table_specs(tmp))
 
+    def test_snapshot_strategy_is_accepted(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            self.write_json(
+                tmp,
+                "sales.snapshot_source.json",
+                {"strategy": "SNAPSHOT", "primary_keys": []},
+            )
+
+            specs = load_table_specs(tmp)
+
+            self.assertEqual("SNAPSHOT", specs[0]["strategy"])
+
     def test_name_must_match_filename_when_supplied(self):
         with tempfile.TemporaryDirectory() as tmp:
             self.write_json(
