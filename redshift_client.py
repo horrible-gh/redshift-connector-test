@@ -45,6 +45,12 @@ __REDSHIFT_TO_FIVETRAN_TYPE = {
 # Replication strategy constants
 __STRATEGY_FULL = "FULL"
 __STRATEGY_INCREMENTAL = "INCREMENTAL"
+__STRATEGY_SNAPSHOT = "SNAPSHOT"
+
+# Synthetic destination key used only by SNAPSHOT tables. The source table is
+# not expected to contain this column; it is added to outgoing records so that
+# duplicate source rows remain distinct after truncate + upsert.
+SNAPSHOT_ROW_ID_COLUMN = "connector_snapshot_row_id"
 __SUPPORTED_FILTER_OPERATORS = {">", ">=", "<", "<=", "=", "!="}
 
 
@@ -59,7 +65,7 @@ class TablePlan:
         primary_keys: List[str] - List of primary key columns
         selected_columns: List[str] - List of columns to select
         explicit_columns: Dict[str, str] - Mapping of column names to explicit Fivetran semantic types
-        strategy: str - Replication strategy ('FULL' or 'INCREMENTAL')
+        strategy: str - Replication strategy ('FULL', 'INCREMENTAL', or 'SNAPSHOT')
         replication_key: Optional[str] - Name of the replication key column, or None
         use_chunking: bool - Whether to use chunked cursor processing for this table (true) or not (false)
         filter_condition: Optional[dict] - Static WHERE filter applied on every sync, or None
@@ -615,6 +621,13 @@ def _determine_strategy_and_replication_key(spec, cols_with_types, enable_comple
     provided_replication_key = spec.get("replication_key")
     table_name = spec.get("name")
 
+    # SNAPSHOT always preserves replacement semantics, even when complete-resync
+    # is globally enabled. A replication key is optional and is used only as a
+    # chunk boundary when available; it is never used to resume across syncs.
+    if strategy == __STRATEGY_SNAPSHOT:
+        replication_key = provided_replication_key or infer_replication_key(cols_with_types)
+        return __STRATEGY_SNAPSHOT, replication_key
+
     # Explicit FULL: never infer, ignore any provided replication key
     if strategy == __STRATEGY_FULL or enable_complete_resync:
         return __STRATEGY_FULL, None
@@ -682,6 +695,19 @@ def _build_plan(
     explicit_cols = {**user_column_types, **explicit_cols}
     # List of selected column names required for building the SQL query
     selected_columns = [column for column, _ in selected_cols_with_types]
+
+    if strategy == __STRATEGY_SNAPSHOT:
+        # SNAPSHOT must preserve duplicate source rows. Fivetran has no insert
+        # operation, so every emitted row receives a synthetic primary key after
+        # the destination table has been truncated.
+        source_columns_lower = {column.lower() for column in selected_columns}
+        if SNAPSHOT_ROW_ID_COLUMN.lower() in source_columns_lower:
+            raise ValueError(
+                f"{stream}: source column '{SNAPSHOT_ROW_ID_COLUMN}' conflicts "
+                "with the connector's SNAPSHOT row identifier."
+            )
+        primary_keys = [SNAPSHOT_ROW_ID_COLUMN]
+        explicit_cols[SNAPSHOT_ROW_ID_COLUMN] = "LONG"
 
     # Determine if chunking should be enabled for this table
     if auto_schema_detection:
@@ -904,6 +930,7 @@ def sync_table_chunked_cursors(connection, plan, state, bookmark, batch_size):
                 batch_size=batch_size,
                 seen=0,
                 table_cursor=table_cursor,
+                row_id_offset=total_seen,
             )
             cursor.execute("COMMIT")
 
@@ -944,6 +971,7 @@ def upsert_record(
     batch_size,
     seen,
     table_cursor,
+    row_id_offset=0,
 ):
     """
     Upsert records from the cursor into the destination table based on the provided TablePlan.
@@ -981,6 +1009,13 @@ def upsert_record(
         for row in rows:
             # Form a record dictionary mapping column names to their corresponding values
             record = dict(zip(column_names, row))
+
+            if plan.strategy == __STRATEGY_SNAPSHOT:
+                # Fivetran does not expose an INSERT operation. A monotonically
+                # increasing synthetic PK makes each source row unique within
+                # this snapshot, including byte-for-byte duplicate rows.
+                record[SNAPSHOT_ROW_ID_COLUMN] = row_id_offset + seen + 1
+
             # The 'upsert' operation is used to insert or update data in the destination table.
             # The op.upsert method is called with two arguments:
             # - The first argument is the name of the table to upsert the data into.
@@ -1070,8 +1105,19 @@ def sync_table(connection, configuration, plan, state):
     """
     replication_key = plan.replication_key
     prev_state = state.get(plan.stream) or {}
-    bookmark = prev_state.get("bookmark") if replication_key else None
     batch_size = int(configuration["batch_size"])
+
+    if plan.strategy == __STRATEGY_SNAPSHOT:
+        # Replacement snapshot: mark all previously synced rows deleted, then
+        # repopulate the current source image with synthetic row identifiers.
+        # The operation is buffered by the SDK and becomes effective at checkpoint.
+        log.info(f"{plan.stream}: Starting SNAPSHOT replacement")
+        op.truncate(table=plan.stream)
+        # Never resume a SNAPSHOT from a previous sync bookmark. A failed run is
+        # restarted from the beginning and truncated again.
+        bookmark = None
+    else:
+        bookmark = prev_state.get("bookmark") if replication_key else None
 
     # Use the appropriate sync method based on whether chunking is enabled for the table
     if plan.use_chunking and replication_key:
