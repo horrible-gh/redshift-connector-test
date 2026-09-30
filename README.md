@@ -1,46 +1,47 @@
 # Redshift Large Data Volume Example Connector
 
-## Connector overview
+## 概要
 
-This example connector demonstrates how to sync large tables from Amazon Redshift efficiently by using the Connector SDK. The connector follows best practices for high-volume ingestion scenarios using Connector SDK. It implements optimized data extraction techniques, including parallel processing and incremental loading, to handle large datasets effectively.
+このリポジトリは、Fivetran 公式の `redshift/large_data_volume` テンプレートをベースに、Amazon Redshift の大容量テーブルを Connector SDK 経由で同期するための検証・拡張実装です。
 
-## Requirements
+主な拡張点は以下です。
 
-- [Supported Python versions](https://github.com/fivetran/community_connectors/blob/main/README.md#requirements)
-- Operating system:
-  - Windows: 10 or later (64-bit only)
-  - macOS: 13 (Ventura) or later (Apple Silicon [arm64] or Intel [x86_64])
-  - Linux: Distributions such as Ubuntu 20.04 or later, Debian 10 or later, or Amazon Linux 2 or later (arm64 or x86_64)
+- テーブル単位の JSON 設定
+- Redshift メタデータからの PK 自動検出
+- timestamp/date 型からの `replication_key` 自動推定
+- VARCHAR / 数値列を明示的な `replication_key` として使用可能
+- 大容量テーブル向けチャンク処理
+- PK あり増分同期での bookmark 境界再取得
+- 全件置換データ向け `SNAPSHOT` 戦略
+- 複数テーブルの並列処理
+- GitHub Actions による自動テスト
 
-## Getting started
+---
 
-Refer to the [Connector SDK Setup Guide](https://fivetran.com/docs/connectors/connector-sdk/setup-guide) to get started.
+## 動作要件
 
-To initialize a new Connector SDK project using this connector as a starting point, run:
+- [Fivetran Connector SDK がサポートする Python バージョン](https://github.com/fivetran/community_connectors/blob/main/README.md#requirements)
+- Windows 10 以降（64bit）
+- macOS 13 Ventura 以降
+- Ubuntu 20.04 / Debian 10 / Amazon Linux 2 以降など
 
-```
+---
+
+## セットアップ
+
+Connector SDK の初期セットアップは [Connector SDK Setup Guide](https://fivetran.com/docs/connectors/connector-sdk/setup-guide) を参照してください。
+
+公式テンプレートを初期化する場合:
+
+```bash
 fivetran init --template redshift/large_data_volume
 ```
 
-`fivetran init` initializes a new Connector SDK project by setting up the project structure, configuration files, and a connector you can run immediately with `fivetran debug`. For more information on `fivetran init`, refer to the [Connector SDK `init` documentation](https://fivetran.com/docs/connector-sdk/connector-development-and-configuration/connector-sdk-commands#fivetraninit).
+`fivetran debug` を実行する前に `configuration.json` の接続情報を設定してください。
 
-> Note: Ensure you have updated the `configuration.json` file with the necessary parameters before running `fivetran debug`. See the [Configuration file](#configuration-file) section for details on the required configuration parameters.
+---
 
-## Features
-
-- Incremental sync via `replication_key` with ordered SQL queries.
-- Automatic schema detection from the source schema.
-- Automatic replication key inference based on column semantic types.
-- Supports both full and incremental syncs, with an option for complete resyncs.
-- Large tables with incremental syncs support chunking of the data to optimize memory usage on the server and client sides.
-- Periodic checkpointing every `CHECKPOINT_EVERY_ROWS`
-- Parallel execution governed by `max_parallel_workers`
-- Connection pooling to reduce overhead during parallel query execution
-- Graceful fallback to complete resync when no suitable replication key is found
-
-## Configuration file
-
-The configuration file (`configuration.json`) contains the necessary parameters to connect to Amazon Redshift. The content of this file is as follows:
+## configuration.json
 
 ```json
 {
@@ -57,80 +58,35 @@ The configuration file (`configuration.json`) contains the necessary parameters 
 }
 ```
 
-The parameters include:
-- `redshift_host`: The hostname of the Redshift cluster.
-- `redshift_port`: The port number for the Redshift cluster.
-- `redshift_database`: The name of the Redshift database to connect to.
-- `redshift_user`: The username for authenticating with Redshift.
-- `redshift_password`: The password for the Redshift user.
-- `redshift_schema`: The schema within the Redshift database to extract data from.
-- `batch_size`: The number of rows to fetch in each batch during data extraction.
-- `auto_schema_detection`: A boolean flag to enable or disable automatic schema detection. To enable automatic schema detection, set this parameter to `true`. To pass the source schema manually using the `table_spec.py`, set this parameter to `false`.
-- `enable_complete_resync`: A boolean flag that defines whether each sync is a [full re-sync](https://fivetran.com/docs/using-fivetran/features#fullresync).
-- `max_parallel_workers`: The maximum number of parallel workers to use for data extraction. We recommend setting this value between 2 and 4. Setting it too high may lead to potential performance degradation.
+### 主な設定項目
 
-> Note: When submitting connector code as a community connector in the open-source [Community Connector repository](https://github.com/fivetran/community_connectors/tree/main), ensure the `configuration.json` file has placeholder values. When adding the connector to your production repository, ensure that the `configuration.json` file is not checked into version control to protect sensitive information.
+- `batch_size`
+  - 1 回の FETCH で取得する行数
+  - `use_chunking=true` の場合はチャンク目標件数としても使用
+- `auto_schema_detection`
+  - Redshift 内のテーブルを自動検出する場合は `true`
+  - このフォークの `tables/*.json` を使う場合は基本的に `false`
+- `enable_complete_resync`
+  - 全テーブルを毎回 FULL として扱うためのグローバル設定
+- `max_parallel_workers`
+  - 並列同期する最大テーブル数
+  - 目安は 2～4 程度
 
-## Requirements file
+> 実運用用の `configuration.json` には認証情報が含まれるため、公開リポジトリへコミットしないでください。
 
-The connector requires the following packages, which should be listed in the `requirements.txt` file:
+---
 
-```
+## requirements.txt
+
+```text
 redshift_connector
 ```
 
-> Note: [Some packages](https://fivetran.com/docs/connector-sdk/technical-reference#preinstalledpackages) are pre-installed in the Connector SDK runtime environment. To avoid dependency conflicts, do not declare them in your `requirements.txt`.
+---
 
-## Authentication
+# テーブル設定
 
-The connector uses username and password authentication to connect to the Redshift database. The credentials are provided in the `configuration.json` file. Ensure that the Redshift user has the necessary permissions to read data from the specified schema and tables.
-
-## Pagination
-
-The connector handles large datasets by implementing batch fetching. The `batch_size` parameter in the `configuration.json` file determines the number of rows fetched in each batch. This approach helps manage memory usage and improves performance when dealing with large tables.
-
-## Data handling
-
-The connector uses the `redshift_connector` library to connect to the Redshift database and execute SQL queries. It retrieves data in batches, processes each batch, and sends it for ingestion. The connector also supports incremental loading by using a `replication_key` to track changes in the source data.
-
-The steps involved in data handling include:
-1. Establishing a connection to the Redshift database using the provided credentials.
-2. Retrieving the list of tables from the specified schema.
-3. For each table, determining the appropriate `replication_key` for incremental loading.
-4. Fetching data in batches based on the `batch_size` parameter.
-5. For tables with a `replication_key` and incremental sync strategy, fetching the data in chunks is also supported to optimize memory usage.
-6. Processing each batch and sending it for ingestion.
-7. Periodically checkpointing the state to ensure data integrity and support resumption in case of failures.
-
-The connector also implements parallel processing to speed up data extraction. The `max_parallel_workers` parameter controls the number of concurrent workers used for fetching data from multiple tables simultaneously.
-
-## Error handling
-
-The connector includes robust error handling mechanisms to manage potential issues during data extraction and processing.
-
-## Tables created
-
-The connector creates tables in the destination based on the source schema. The table names and structures are derived from the Redshift schema specified in the `configuration.json` file. The connector creates a table for each table found in the specified Redshift schema with the name format `<schema_name>_<table_name>`.
-
-The connector automatically detects the schema of each table and creates corresponding tables in the destination with appropriate data types. If automatic schema detection is disabled, the connector uses the schema defined in the `table_spec.py` file.
-
-## Additional files
-
-The connector includes the following additional files:
-- **`table_spec.py`**: This file defines the schema for each table in the Redshift database. It is used when automatic schema detection is disabled. You can customize this file to specify the exact schema for each table, including column names and data types.
-- **`redshift_client.py`**: This file contains the logic for connecting to the Redshift database and executing SQL queries. It encapsulates the connection handling, query execution, and data fetching logic.
-
-## Additional considerations
-
-The examples provided are intended to help you effectively use Fivetran's Connector SDK. While we've tested the code, Fivetran cannot be held responsible for any unexpected or negative consequences that may arise from using these examples. For inquiries, please reach out to our Support team.
-
-
-## Table-spec mode used in this fork
-
-This repository keeps Fivetran's Redshift Large Data Volume connector as the base
-and moves per-table configuration out of Python code.
-
-Active table files are placed directly under `tables/`:
+テーブルごとの設定は Python コードではなく `tables/` 配下の JSON ファイルで管理します。
 
 ```text
 tables/
@@ -144,18 +100,21 @@ tables/
     └── example.no_pk_no_timestamp.json
 ```
 
-The file name is the table identity: `<schema>.<table>.json`. The `name` field
-can therefore be omitted. Files under subdirectories such as `tables/examples/`
-are not loaded.
+有効な設定ファイルは `tables/` 直下のみです。`tables/examples/` などのサブディレクトリは読み込まれません。
 
-For this mode, keep `auto_schema_detection` set to `false`. The connector
-still reads Redshift metadata for each table named by a JSON file, so columns and
-primary keys can continue to be discovered from the source.
+ファイル名がテーブル識別子になります。
 
-### Default + override behavior
+```text
+<schema>.<table>.json
+```
 
-`tables/_defaults.json` supplies project-wide defaults. A table JSON only needs
-to contain exceptions.
+例:
+
+```text
+tables/public.orders.json
+```
+
+`tables/_defaults.json` が共通デフォルトで、各テーブル JSON は差分だけを記述できます。
 
 ```json
 {
@@ -164,71 +123,156 @@ to contain exceptions.
 }
 ```
 
-Important values:
-
-- `"primary_keys": null`: discover the primary key from Redshift metadata.
-- `"primary_keys": []`: explicitly declare that the table has no primary key.
-- `"strategy": "AUTO"`: use incremental sync when a suitable timestamp/date
-  replication key is available; otherwise fall back to full sync.
-- `"strategy": "SNAPSHOT"`: replace the destination's active row set on every sync.
-  The connector calls `op.truncate()`, then reloads the complete source table. Because
-  the Connector SDK has no INSERT operation, SNAPSHOT rows receive the synthetic
-  `connector_snapshot_row_id` primary key before `op.upsert()`. This preserves
-  byte-for-byte duplicate source rows instead of collapsing them into one row.
-- `"replication_key": null`: infer the replication key from timestamp/date
-  columns, preferring names such as `updated_at` and `last_updated`.
-- `"enabled": false`: temporarily exclude a table without deleting its file.
-
-To add a table, create one file such as:
-
-```text
-tables/public.orders.json
-```
-
-An empty JSON object is valid when all defaults and Redshift metadata should be
-used:
+空 JSON も有効です。
 
 ```json
 {}
 ```
 
-The four files in `tables/examples/` document the PK/timestamp combinations
-without becoming active sync targets.
+---
 
+## primary_keys
 
-### Incremental boundary safety for PK-backed tables
+`null` の場合は Redshift メタデータから PK を自動検出します。
 
-For incremental tables that have a primary key, a saved replication-key value is
-re-read inclusively on the next sync (`>= bookmark`). Re-reading the boundary is
-intentional: multiple rows commonly share the same update timestamp, and primary-key
-upsert safely collapses already-seen rows while preventing rows at the saved boundary
-from being skipped after a restart.
+```json
+{ "primary_keys": null }
+```
 
-When chunking is enabled, only the first chunk of a sync/restart uses the inclusive
-lower boundary. Later chunks use strict `>` so chunk processing always advances.
-This behavior requires no additional per-table JSON setting.
+PK が存在しないことを明示する場合:
 
+```json
+{ "primary_keys": [] }
+```
 
-### Batch size and chunk size
+複合キーを手動指定する場合:
 
-When `use_chunking` is enabled, the configured `batch_size` is also used as
-the target chunk size. There is no separate fixed chunk-size setting.
+```json
+{ "primary_keys": ["order_id", "line_no"] }
+```
 
-For example, `batch_size=20000` means:
-- each cursor FETCH requests up to 20,000 rows;
-- each chunk boundary is selected around the 20,000th remaining row.
+---
 
-Rows sharing the same replication-key value stay in the same chunk, so an actual
-chunk may be larger than `batch_size`.
+## strategy
 
+利用可能な値:
 
-### SNAPSHOT strategy for full-replacement sources
+```text
+AUTO
+FULL
+INCREMENTAL
+SNAPSHOT
+```
 
-Use `SNAPSHOT` when the source table itself is rebuilt as a complete image and
-the destination must match that image, including duplicate rows.
+### AUTO
 
-Example for a source with no database primary key but with a timestamp available
-for chunk boundaries:
+timestamp/date 型の `replication_key` を取得できる場合は INCREMENTAL、取得できない場合は FULL へフォールバックします。
+
+### INCREMENTAL
+
+bookmark を利用して変更分だけを取得します。`replication_key` を明示した場合は timestamp 型でなくても利用できます。
+
+```json
+{
+  "strategy": "INCREMENTAL",
+  "replication_key": "change_seq"
+}
+```
+
+### FULL
+
+毎回ソース全件を読み取り、`op.upsert()` で送信します。宛先テーブルの事前 truncate は行いません。
+
+### SNAPSHOT
+
+ソーステーブルが毎回「現在の全件イメージ」として生成される場合に使用します。
+
+```text
+op.truncate()
+    ↓
+Redshift 全件取得
+    ↓
+connector_snapshot_row_id を各行へ付与
+    ↓
+op.upsert()
+```
+
+---
+
+## replication_key
+
+`null` の場合は timestamp/date 型の列から自動推定します。
+
+```json
+{ "replication_key": null }
+```
+
+timestamp 型ではない列を変更キーとして使う場合は明示指定します。
+
+VARCHAR 例:
+
+```json
+{ "replication_key": "update_time" }
+```
+
+数値例:
+
+```json
+{ "replication_key": "change_seq" }
+```
+
+`change_seq` は PK である必要はなく、値の重複も許容されます。ただし変更時に値が前進し、bookmark より過去へ戻らないことが前提です。
+
+---
+
+## enabled
+
+一時的に同期対象から外す場合:
+
+```json
+{ "enabled": false }
+```
+
+---
+
+# PK あり増分同期の bookmark 境界
+
+PK を持つ INCREMENTAL テーブルでは、保存済み bookmark と同じ `replication_key` 値を次回同期時に再取得します。
+
+```sql
+WHERE replication_key >= :bookmark
+```
+
+同一 timestamp / sequence を持つ複数行が境界に存在しても取りこぼさないためです。
+
+再取得された行は PK ベースの `op.upsert()` により同一行として処理されます。
+
+チャンク処理では、最初のチャンクだけ保存済み bookmark を `>=` で再取得し、同一実行内の次チャンク以降は `>` を使用して前進します。
+
+---
+
+# batch_size とチャンクサイズ
+
+`use_chunking=true` の場合、`configuration.json` の `batch_size` をチャンク目標件数としても使用します。固定の `CHUNK_SIZE` はありません。
+
+例:
+
+```text
+batch_size = 20000
+
+FETCH 単位       = 最大 20,000 行
+チャンク目標件数 = 約 20,000 行
+```
+
+チャンク境界は `replication_key` でソートした結果のおおよそ `batch_size` 番目の値で決定します。
+
+同じ `replication_key` 値を持つ行は同一チャンクに含めるため、実際の件数が `batch_size` を超える場合があります。
+
+---
+
+# SNAPSHOT 戦略
+
+SNAPSHOT は、PK がなく、ソース側で毎回全件置換されるテーブルを想定しています。
 
 ```json
 {
@@ -239,16 +283,137 @@ for chunk boundaries:
 }
 ```
 
-For SNAPSHOT tables:
+timestamp/date 型の列が存在する場合、その列をチャンク境界として自動推定できます。
 
-- Redshift primary-key metadata is not used for destination identity.
-- The destination schema declares `connector_snapshot_row_id` as a synthetic
-  `LONG` primary key.
-- The synthetic key is generated as 1, 2, 3, ... across the entire table load,
-  including across chunk boundaries.
-- The source timestamp, when available, may be inferred as a chunk boundary key,
-  but its saved bookmark is never used to resume a later SNAPSHOT sync.
-- Each sync starts with `op.truncate(table=...)`, then reloads the complete source
-  image using `op.upsert()`.
-- Two source rows with identical values remain two destination rows because their
-  synthetic row identifiers differ.
+ただし SNAPSHOT は過去 sync の bookmark を次回開始位置として使用せず、毎回最初から全件を再取得します。
+
+## SNAPSHOT の synthetic primary key
+
+Connector SDK には INSERT 専用 operation がないため、SNAPSHOT では各行に以下の synthetic key を追加します。
+
+```text
+connector_snapshot_row_id
+```
+
+例:
+
+```text
+ソース
+A | 100
+A | 100
+A | 100
+
+送信時
+1 | A | 100
+2 | A | 100
+3 | A | 100
+```
+
+これにより完全に同じ内容の行でも別行として保持できます。
+
+synthetic key はテーブル全体で 1, 2, 3... と連番になり、チャンクをまたいでもリセットされません。
+
+---
+
+# 想定テーブルパターン
+
+| パターン | PK | timestamp | 処理 |
+| --- | --- | --- | --- |
+| 1. 有有 | あり | あり | INCREMENTAL |
+| 2. 有無 | あり | なし | 代替変更キーがあれば INCREMENTAL |
+| 3. 無有 | なし | あり | SNAPSHOT（全件置換データ） |
+| 4. 無無 | なし | なし | 対象外 / 未対応 |
+
+## パターン 1: PK あり / timestamp あり
+
+基本的には自動設定できます。
+
+```json
+{}
+```
+
+必要に応じて timestamp を明示します。
+
+```json
+{
+  "replication_key": "updated_at",
+  "use_chunking": true
+}
+```
+
+## パターン 2: PK あり / timestamp なし
+
+timestamp の代わりとなる変更キーを明示します。
+
+```json
+{
+  "replication_key": "update_time",
+  "use_chunking": true
+}
+```
+
+または:
+
+```json
+{
+  "replication_key": "change_seq",
+  "use_chunking": true
+}
+```
+
+単純な連番、FK、複合 PK の一部である detail sequence など、更新時刻・変更順序を表さない値は `replication_key` として使用できません。
+
+## パターン 3: PK なし / timestamp あり
+
+対象テーブルが毎回全件置換される前提で SNAPSHOT を使用します。
+
+```json
+{
+  "primary_keys": [],
+  "strategy": "SNAPSHOT",
+  "replication_key": null,
+  "use_chunking": true
+}
+```
+
+## パターン 4: PK なし / timestamp なし
+
+このフォークでは未対応です。安全な増分位置も行識別子も存在しないため、自動同期方法は提供しません。
+
+---
+
+# テスト
+
+GitHub Actions では主に以下を検証します。
+
+- Python 3.9 / 3.11
+- table spec の読み込み
+- `primary_keys=null` / `[]` の区別
+- INCREMENTAL bookmark の `>=` / `>` 境界
+- 数値 `replication_key` の bookmark 型保持
+- `batch_size` とチャンクサイズの連動
+- SNAPSHOT strategy の validation
+- SNAPSHOT synthetic PK
+- 完全重複行への異なる synthetic key 付与
+- SNAPSHOT 開始時の `op.truncate()`
+- SNAPSHOT が以前の bookmark を再利用しないこと
+- チャンク間で synthetic row id が連続すること
+
+---
+
+## 注意事項
+
+このリポジトリは Fivetran 公式 Redshift Large Data Volume サンプルをベースにした検証・拡張実装です。
+
+実環境へ適用する前に、Redshift / Fivetran / Snowflake 環境で以下を確認してください。
+
+- 初回同期
+- 2 回目以降の増分同期
+- bookmark 境界
+- 同一 timestamp / sequence の大量重複
+- 中断後の再実行
+- チャンク処理
+- 列追加 / 削除
+- SNAPSHOT の truncate / reload
+- 完全重複行の保持
+- 大容量テーブルでの処理時間・負荷
