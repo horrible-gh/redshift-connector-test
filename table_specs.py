@@ -112,9 +112,10 @@ def _validate_spec(spec: dict, source: Path, expected_name: Optional[str] = None
             "AUTO",
             "FULL",
             "INCREMENTAL",
+            "SNAPSHOT",
         }:
             raise ValueError(
-                f"{source}: 'strategy' must be AUTO, FULL, INCREMENTAL, or null."
+                f"{source}: 'strategy' must be AUTO, FULL, INCREMENTAL, SNAPSHOT, or null."
             )
 
     _validate_string_list(
